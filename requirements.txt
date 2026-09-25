@@ -1,0 +1,5 @@
+anthropic>=0.40.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+pytest>=8.0.0
+pytest-mock>=3.14.0
