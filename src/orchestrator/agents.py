@@ -24,10 +24,26 @@ class AgentResult:
     escalated: bool = False
     escalation_reason: str | None = None
     tool_calls_made: list[str] = None  # tool names, in order
+    usage: dict[str, int] | None = None  # Etapa 14: summed across every .send() in this handle()
 
     def __post_init__(self):
         if self.tool_calls_made is None:
             self.tool_calls_made = []
+
+
+def _sum_usage(a: dict[str, int] | None, b: dict[str, int] | None) -> dict[str, int] | None:
+    """Adds two usage dicts (either may be None if the client didn't
+    report usage, e.g. hand-built ClaudeResponse in a test). Returns None
+    only if BOTH are None -- a single real API call is enough to start
+    tracking real cost for the rest of the loop."""
+    if a is None and b is None:
+        return None
+    a = a or {"input_tokens": 0, "output_tokens": 0}
+    b = b or {"input_tokens": 0, "output_tokens": 0}
+    return {
+        "input_tokens": a["input_tokens"] + b["input_tokens"],
+        "output_tokens": a["output_tokens"] + b["output_tokens"],
+    }
 
 
 _SHARED_LIMITS = (
@@ -60,6 +76,7 @@ class Specialist:
     def handle(self, conversation: list[dict[str, str]]) -> AgentResult:
         messages: list[dict[str, Any]] = list(conversation)
         tool_calls_made: list[str] = []
+        usage: dict[str, int] | None = None
 
         for _ in range(MAX_TOOL_ITERATIONS):
             response = self._client.send(
@@ -67,10 +84,14 @@ class Specialist:
                 messages=messages,
                 tools=TOOL_SCHEMAS,
             )
+            usage = _sum_usage(usage, response.usage)
 
             if response.stop_reason != "tool_use" or not response.tool_calls:
                 return AgentResult(
-                    agent_name=self.name, text=response.text, tool_calls_made=tool_calls_made
+                    agent_name=self.name,
+                    text=response.text,
+                    tool_calls_made=tool_calls_made,
+                    usage=usage,
                 )
 
             # Claude asked to call one or more tools: execute them locally and
@@ -101,6 +122,7 @@ class Specialist:
                         escalated=True,
                         escalation_reason=result.escalation_reason,
                         tool_calls_made=tool_calls_made,
+                        usage=usage,
                     )
             messages.append({"role": "user", "content": tool_result_content})
 
@@ -114,6 +136,7 @@ class Specialist:
             escalated=True,
             escalation_reason="tool-use loop exceeded max iterations",
             tool_calls_made=tool_calls_made,
+            usage=usage,
         )
 
 

@@ -11,9 +11,12 @@ Core pieces:
 - privacy: PII detection used by the knowledge-base guardrail test
 - resilience: optional retry-with-backoff + circuit breaker around any
   .send()-shaped client, for transient Claude API failures
+- budget: optional per-session cost cap, fed by real token usage, that
+  escalates to a human once a session crosses it
 - orchestrator: ties everything together, including human handoff, the
-  LGPD data-subject rights (export_session_data, forget_session), and
-  optional resilience (resilient=True)
+  LGPD data-subject rights (export_session_data, forget_session), optional
+  resilience (resilient=True) and the optional cost cap
+  (max_session_cost_usd)
 """
 
 __version__ = "0.1.0"

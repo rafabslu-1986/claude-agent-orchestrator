@@ -43,6 +43,7 @@ _ROUTER_SYSTEM_PROMPT = build_system_prompt(
 class RouteResult:
     intent: str
     raw_text: str
+    usage: dict[str, int] | None = None  # Etapa 14: feeds the per-session budget guardrail
 
 
 class Router:
@@ -59,4 +60,4 @@ class Router:
         intent = response.text.strip().lower()
         if intent not in INTENTS:
             intent = "unknown"
-        return RouteResult(intent=intent, raw_text=response.text)
+        return RouteResult(intent=intent, raw_text=response.text, usage=response.usage)

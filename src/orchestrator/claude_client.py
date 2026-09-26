@@ -28,6 +28,12 @@ class ClaudeResponse:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = "end_turn"
     raw: Any = None
+    usage: dict[str, int] | None = None
+    """{"input_tokens": int, "output_tokens": int} when the underlying SDK
+    response carries usage (every real API call does); None only for
+    hand-built responses in tests that don't set it. Etapa 14's per-session
+    budget guardrail is built entirely on this field.
+    """
 
 
 class ClaudeClient:
@@ -113,9 +119,21 @@ class ClaudeClient:
                 text_parts.append(block.text)
             elif block_type == "tool_use":
                 tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+
+        usage_obj = getattr(raw, "usage", None)
+        usage = (
+            {
+                "input_tokens": getattr(usage_obj, "input_tokens", 0),
+                "output_tokens": getattr(usage_obj, "output_tokens", 0),
+            }
+            if usage_obj is not None
+            else None
+        )
+
         return ClaudeResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
             stop_reason=getattr(raw, "stop_reason", "end_turn"),
             raw=raw,
+            usage=usage,
         )
