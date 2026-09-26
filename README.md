@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml)
 
+**Live API:** [claude-agent-orchestrator-production.up.railway.app/docs](https://claude-agent-orchestrator-production.up.railway.app/docs) — an interactive Swagger UI where you can send a real message and watch it get routed, grounded and answered. See "Deploy (Etapa 6)" below for how it's hosted.
+
 A multi-agent orchestration framework built directly on the Claude API — no no-code layer in between. It routes an inbound message to the right specialist, grounds every policy-level answer in a real knowledge base through native tool use, and hands off to a human the moment an agent isn't confident.
 
 This generalizes the routing/handoff pattern from a production WhatsApp + Instagram customer service system I built and run for a travel agency, rewritten here as a reusable, client-agnostic framework so the architecture itself — not one company's data — is what's on display.
@@ -43,7 +45,8 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ## Key results
 
-- **50 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, per-session cost-cap accounting and enforcement, and 10 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, the tool-loop giving up gracefully after too many iterations, and a session that gets escalated once it crosses its cost cap).
+- **57 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, per-session cost-cap accounting and enforcement, the FastAPI HTTP layer (Etapa 6), and 10 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, the tool-loop giving up gracefully after too many iterations, and a session that gets escalated once it crosses its cost cap).
+- **Live and public**: the API is deployed on Railway and answers real requests against the production Claude model — see "Deploy (Etapa 6)" below.
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -51,6 +54,8 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ```
 .github/workflows/tests.yml CI: runs the full suite on push/PR (Etapa 12)
+Procfile process entry point for Railway (Etapa 6)
+api/main.py FastAPI wrapper exposing the orchestrator over HTTP (Etapa 6)
 src/orchestrator/
 claude_client.py thin wrapper around the Anthropic SDK (the only file that imports it)
 prompts.py FPCL system-prompt builder
@@ -64,7 +69,7 @@ resilience.py retry + circuit breaker for transient API failures (Etapa 13)
 budget.py per-session cost cap fed by real token usage (Etapa 14)
 orchestrator.py ties it all together, plus LGPD export/erasure
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 50 scenarios, run offline against a fake client
+tests/ 57 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -97,6 +102,66 @@ python examples/demo_conversation.py
 - **New tool**: add a schema to `TOOL_SCHEMAS` in `tools.py` and a handler method on `ToolExecutor`.
 - **Real vector DB**: implement the same `search(query, top_k)` interface as `KnowledgeBase` and swap it in — no other file changes.
 - **Persistent memory**: swap the dict in `SessionMemory` for Redis or a database table behind the same `get` / `append` / `clear` interface.
+
+## Deploy: uma URL publica de verdade (Etapa 6)
+
+### O problema
+
+Ate aqui, "o sistema funciona" so podia ser verificado rodando `pytest` ou
+`examples/demo_conversation.py` no meu proprio computador. Isso prova que a
+logica funciona, mas nao prova que existe um servico de verdade: uma API na
+internet que um cliente (ou um recrutador) pode chamar sem clonar o repo.
+Etapa 7 do roadmap original (portfolio: README + prova de funcionamento) fica
+incompleta sem isso -- um GIF gravado localmente prova menos do que um GIF
+gravado contra uma URL publica de producao.
+
+### A solucao
+
+`api/main.py`: um wrapper HTTP de ~90 linhas em FastAPI em torno do
+`Orchestrator` exato que o resto do projeto ja testa -- `POST /messages`,
+mais `GET`/`DELETE /sessions/{id}` expondo o export/erasure da Etapa 11
+(LGPD) tambem por HTTP. Nada da orquestracao muda; isso e so uma forma de
+chamar `handle_message` de fora do processo Python.
+
+**Por que Railway em vez de Vercel**, mesmo o roadmap original sugerindo
+Vercel: `SessionMemory` e `SessionBudget` sao dicts em memoria, no processo
+-- uma conversa so fica coerente entre turnos se a mesma instancia de
+processo responder toda chamada daquele `session_id`. Uma funcao serverless
+(Vercel) e stateless e efemera por design: nao ha garantia de que o mesmo
+"processo" atenda a segunda mensagem da mesma sessao. Railway roda a app
+como um processo persistente (`uvicorn` de verdade, via `Procfile`), que e
+o encaixe correto pra esse design -- a troca fica documentada aqui em vez
+de escondida, e a limitacao real (memoria de sessao nao sobrevive a um
+restart do processo ou a mais de 1 replica) fica honesta: para producao de
+verdade, a extensao natural e a mesma que `memory.py` ja prve -- trocar o
+dict por Redis.
+
+### Stack tecnica
+
+FastAPI + `uvicorn` (2 dependencias novas em `requirements.txt`). Nenhuma
+mudanca em `src/orchestrator/`. Deploy via GitHub -> Railway (push pra
+`main` reconstroi e redeploya automaticamente), com `ANTHROPIC_API_KEY`
+como variavel de ambiente do servico -- nunca commitada.
+
+### Resultado
+
+7 testes novos (57 no total) cobrindo a camada HTTP com `FastAPI.TestClient`
+contra o mesmo `FakeClaudeClient` do resto da suite -- offline, sem tocar a
+API real -- incluindo o guardrail de orcamento (Etapa 14) escalonando via
+HTTP sem uma segunda chamada ao modelo. A API esta no ar, publica, em
+`claude-agent-orchestrator-production.up.railway.app`; o GIF abaixo (Etapa
+7) mostra uma chamada real contra ela, `/docs` -> `POST /messages` ->
+resposta fundamentada na base de conhecimento via `search_knowledge_base`,
+tudo contra o modelo de producao, no navegador, sem nenhum setup local.
+
+![Demo: chamada real contra a API publica, roteando e respondendo com base na knowledge base](docs/orchestrator-live-demo.gif)
+
+```bash
+# rodar localmente
+export ANTHROPIC_API_KEY=sk-ant-...
+uvicorn api.main:app --reload
+# depois abra http://127.0.0.1:8000/docs
+```
 
 ## Observabilidade: custo e latencia (Helicone)
 
