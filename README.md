@@ -125,7 +125,7 @@ escalonamento humano no caso "unknown"). As 8 chamadas subjacentes
 custo e latencia individuais, sem quebrar nenhum dos 16 testes automatizados
 existentes.
 
-![Dashboard Helicone mostrando requisicoes capturadas](docs/image.png)
+![Dashboard Helicone mostrando requisicoes capturadas](docs/helicone-dashboard-cropped.png)
 
 ## License
 
