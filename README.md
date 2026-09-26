@@ -16,21 +16,21 @@ This generalizes the routing/handoff pattern from a production WhatsApp + Instag
 
 ```
 inbound message
-      │
-      ▼
-   Router (1 Claude call, no tools)
-      │
-      ├── sales / support / billing ──▶ Specialist agent
-      │                                     │
-      │                        ┌────────────┴────────────┐
-      │                        ▼                          ▼
-      │              search_knowledge_base        escalate_to_human
-      │               (TF-IDF over local docs)      (flags for a human)
-      │                        │
-      │                        ▼
-      │                 grounded final answer
-      │
-      └── unknown ──▶ escalate_to_human directly
+│
+▼
+Router (1 Claude call, no tools)
+│
+├── sales / support / billing ──▶ Specialist agent
+│ │
+│ ┌────────────┴────────────┐
+│ ▼ ▼
+│ search_knowledge_base escalate_to_human
+│ (TF-IDF over local docs) (flags for a human)
+│ │
+│ ▼
+│ grounded final answer
+│
+└── unknown ──▶ escalate_to_human directly
 ```
 
 Every arrow above is a real function call in this repo, not a diagram aspiration — see `src/orchestrator/orchestrator.py` for the whole pipeline in about 40 lines.
@@ -49,17 +49,17 @@ The retrieval layer (`rag.py`) uses TF-IDF + cosine similarity over local markdo
 
 ```
 src/orchestrator/
-  claude_client.py   thin wrapper around the Anthropic SDK (the only file that imports it)
-  prompts.py          FPCL system-prompt builder
-  router.py           intent classification
-  agents.py           specialist agents + the shared tool-use loop
-  rag.py               TF-IDF knowledge base retrieval
-  tools.py             tool schemas + local tool implementations
-  memory.py            per-session conversation state
-  orchestrator.py     ties it all together
-  knowledge_base/      sample markdown docs the specialists search against
-tests/                16 scenarios, run offline against a fake client
-examples/              live demo script (needs a real API key)
+claude_client.py thin wrapper around the Anthropic SDK (the only file that imports it)
+prompts.py FPCL system-prompt builder
+router.py intent classification
+agents.py specialist agents + the shared tool-use loop
+rag.py TF-IDF knowledge base retrieval
+tools.py tool schemas + local tool implementations
+memory.py per-session conversation state
+orchestrator.py ties it all together
+knowledge_base/ sample markdown docs the specialists search against
+tests/ 16 scenarios, run offline against a fake client
+examples/ live demo script (needs a real API key)
 ```
 
 ## Installation
@@ -126,6 +126,45 @@ custo e latencia individuais, sem quebrar nenhum dos 16 testes automatizados
 existentes.
 
 ![Dashboard Helicone mostrando requisicoes capturadas](docs/helicone-dashboard-cropped.png)
+
+## Evals: taxa de acerto do roteamento (Etapa 9)
+
+### O problema
+
+Testes automatizados provam que o codigo funciona (dado input X, a funcao Y
+retorna Z), mas nao provam que o agente toma a decisao certa quando a
+mensagem e ambigua, mal escrita ou em outro idioma. Sem isso, a unica forma
+de saber se o roteador esta bom e observar producao e torcer.
+
+### A solucao
+
+Um eval set com 20 cenarios reais de conversa (`evals/scenarios.py`),
+cobrindo os tres intents (`sales`, `support`, `billing`), casos que devem
+escalar para humano (`unknown`) e casos de borda deliberados: intent
+misturado, mensagem curta, portugues em vez de ingles, e cliente frustrado.
+Um runner (`evals/run_evals.py`) manda cada cenario pro orchestrator de
+verdade, contra a API real do Claude, e compara o intent e o escalonamento
+retornados com o esperado.
+
+Diferente dos 16 testes offline (que usam um cliente Claude falso e
+travado), esse eval roda contra o modelo real: mede o comportamento do
+sistema em producao, nao so a logica do codigo.
+
+### Stack tecnica
+
+Python puro (`dataclasses`), sem framework de eval. Resultado de cada
+rodada salvo em JSON (`evals/results/`, ignorado no git) para comparar
+rodadas ao longo do tempo.
+
+### Resultado
+
+20/20 cenarios passaram (100%) na primeira rodada real, incluindo os
+quatro casos de borda e o cenario em portugues.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python evals/run_evals.py
+```
 
 ## License
 
