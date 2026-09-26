@@ -41,7 +41,7 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ## Key results
 
-- **18 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation, and 6 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, and the tool-loop giving up gracefully after too many iterations).
+- **30 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, and 8 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, and the tool-loop giving up gracefully after too many iterations).
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -55,10 +55,11 @@ router.py intent classification
 agents.py specialist agents + the shared tool-use loop
 rag.py BM25 knowledge base retrieval
 tools.py tool schemas + local tool implementations
-memory.py per-session conversation state
-orchestrator.py ties it all together
+memory.py per-session conversation state, optional LGPD TTL
+privacy.py PII detection (knowledge-base guardrail)
+orchestrator.py ties it all together, plus LGPD export/erasure
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 18 scenarios, run offline against a fake client
+tests/ 30 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -221,6 +222,73 @@ tokens.
 
 ```bash
 python evals/rag_eval.py
+```
+
+## LGPD compliance (Etapa 11)
+
+### O problema
+
+Nada nas Etapas 1-10 tratava as conversas dos clientes como o que elas sao:
+dados pessoais sob a LGPD. Tres lacunas concretas, nao teoricas:
+retencao indefinida (`SessionMemory` guardava tudo enquanto o processo
+estivesse de pe, sem limite), nenhum mecanismo para um cliente pedir seus
+dados de volta ou pedir para serem apagados, e -- a mais seria -- a
+integracao com Helicone da Etapa 8 encaminhava o prompt e a resposta
+completos (ou seja, a mensagem literal do cliente) para um terceiro por
+padrao, sem necessidade: o objetivo daquela etapa era custo e latencia, nao
+o conteudo da conversa.
+
+### A solucao
+
+Tres mudancas independentes, cada uma testada:
+
+**Retencao (Art. 6, III, necessidade)**: `SessionMemory` agora aceita
+`ttl_hours`; mensagens mais velhas que o TTL sao descartadas na proxima
+leitura ou escrita daquela sessao. Sem `ttl_hours`, o comportamento de hoje
+continua idêntico (nada muda por padrao).
+
+**Direitos do titular (Art. 18)**: `Orchestrator.export_session_data()`
+(acesso/portabilidade, incisos II e V) e `Orchestrator.forget_session()`
+(eliminacao, inciso VI) -- esse ultimo ja existia um nivel abaixo
+(`SessionMemory.clear()`), so nao estava exposto como uma operacao de
+verdade no orchestrator.
+
+**Minimizacao com terceiros (Art. 46, seguranca)**: em vez de tentar
+redigir o prompt antes de mandar pra Helicone -- o que exigiria redigir o
+que o proprio Claude recebe, ja que o Helicone e um proxy no meio do
+caminho, nao uma copia ao lado --, a integracao agora manda
+`Helicone-Omit-Request`/`Helicone-Omit-Response` por padrao quando
+`HELICONE_API_KEY` esta definida. Custo e latencia (o motivo da Etapa 8)
+vem dos metadados de uso e do tempo da requisicao, nao do conteudo, entao
+nada se perde exceto a capacidade de ler a mensagem do cliente de volta no
+dashboard -- que e exatamente o que nao deveria estar la. Um
+`HELICONE_LOG_CONTENT=true` explicito reverte isso para debug local.
+
+Como guardrail complementar, `privacy.py` detecta CPF (com digito
+verificador de verdade, nao so o formato), email, telefone brasileiro e
+cartao (via Luhn) -- validado o suficiente para nao confundir um numero de
+pedido de 11 digitos com um CPF invalido, mas ainda assim ambiguo o
+bastante para tratar um numero de pedido de 11 digitos como telefone
+quando nao ha mais contexto (um teste documenta esse caso de propósito). Um
+teste escaneia todo `knowledge_base/*.md` procurando por isso -- a
+lacuna real que esse guardrail existe pra pegar e alguem colar um
+atendimento real numa doc de politica generica.
+
+### Stack tecnica
+
+Nenhuma dependencia nova. `privacy.py` e regex + os algoritmos reais de
+validacao (digito verificador de CPF, Luhn) em Python puro.
+`Helicone-Omit-*` sao so headers HTTP que a Helicone ja suporta.
+
+### Resultado
+
+12 testes novos (30 no total): guardrail de PII sobre a base de
+conhecimento real (0 falsos positivos, 0 falsos negativos no conjunto
+rotulado), TTL de memoria (expira o que deveria, preserva o que nao
+deveria), e export/erasure ponta a ponta pelo Orchestrator.
+
+```bash
+pytest tests/test_privacy.py tests/test_memory.py -v
 ```
 
 ## License
