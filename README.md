@@ -1,5 +1,7 @@
 # Claude Agent Orchestrator
 
+[![CI](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml)
+
 A multi-agent orchestration framework built directly on the Claude API — no no-code layer in between. It routes an inbound message to the right specialist, grounds every policy-level answer in a real knowledge base through native tool use, and hands off to a human the moment an agent isn't confident.
 
 This generalizes the routing/handoff pattern from a production WhatsApp + Instagram customer service system I built and run for a travel agency, rewritten here as a reusable, client-agnostic framework so the architecture itself — not one company's data — is what's on display.
@@ -48,6 +50,7 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 ## Project layout
 
 ```
+.github/workflows/tests.yml CI: runs the full suite on push/PR (Etapa 12)
 src/orchestrator/
 claude_client.py thin wrapper around the Anthropic SDK (the only file that imports it)
 prompts.py FPCL system-prompt builder
@@ -289,6 +292,53 @@ deveria), e export/erasure ponta a ponta pelo Orchestrator.
 
 ```bash
 pytest tests/test_privacy.py tests/test_memory.py -v
+```
+
+## CI automatizado (Etapa 12)
+
+### O problema
+
+Ate a Etapa 11, "os 30 testes passam" era uma afirmacao que so valia no
+momento em que eu rodava `pytest` no meu proprio ambiente, antes de subir
+pro GitHub. Nada garantia que o proximo commit -- meu ou de outra pessoa,
+via pull request -- nao quebrava algo silenciosamente; a suite so seria
+executada de novo na proxima vez que alguem lembrasse de rodar manualmente.
+Pra um projeto publico que serve de portfolio, isso e uma lacuna de
+credibilidade: o README pode alegar "30 testes passando", mas nao ha nada
+verificavel por fora provando isso a cada mudanca.
+
+### A solucao
+
+Um workflow do GitHub Actions (`.github/workflows/tests.yml`) que roda a
+suite inteira a cada push pra `main` e a cada pull request, numa matriz com
+Python 3.11 e 3.12 -- pra garantir que o projeto nao depende sem querer de
+um detalhe de versao especifica. Como bonus informativo (nao trava o
+build), o mesmo workflow tambem roda `evals/rag_eval.py` a cada execucao,
+entao a tabela de Hit Rate / MRR / False-Retrieval Rate da Etapa 10 fica
+visivel no log de toda run, nao so na hora em que eu rodei manualmente.
+
+Diferente das etapas anteriores, aqui a "prova" nao e um numero que eu
+meça e reporte -- e o proprio selo de status do GitHub, que qualquer
+visitante do repositorio pode conferir clicando na aba Actions, sem
+confiar na minha palavra.
+
+### Stack tecnica
+
+GitHub Actions (`actions/checkout@v4`, `actions/setup-python@v5`), sem
+nenhuma dependencia nova no projeto em si -- o workflow so instala o
+`requirements.txt` que ja existia.
+
+### Resultado
+
+Primeira execucao (`CI #1`, disparada pelo commit que adiciona o proprio
+workflow): os 2 jobs da matriz (3.11 e 3.12) completaram com sucesso em 22s
+no total. O badge no topo deste README reflete o status da run mais
+recente em tempo real.
+
+```bash
+# roda localmente o mesmo comando que o CI roda
+pip install -r requirements.txt
+pytest -v
 ```
 
 ## License
