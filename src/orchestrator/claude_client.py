@@ -55,10 +55,26 @@ class ClaudeClient:
 
             helicone_key = os.environ.get("HELICONE_API_KEY")
             if helicone_key:
+                headers = {"Helicone-Auth": f"Bearer {helicone_key}"}
+                # LGPD (Etapa 11): customer messages are personal data, and this
+                # proxy sits directly in the request path -- Helicone doesn't
+                # receive a "copy" that could be redacted separately, it receives
+                # the exact bytes on their way to Claude. Redacting first would
+                # mean redacting what Claude sees too, breaking every specialist.
+                # The fix is to not retain the content at all: cost and latency
+                # (the whole point of Etapa 8) are computed from request timing
+                # and token-usage metadata, not from the prompt/response bodies,
+                # so omitting them costs nothing but the ability to read
+                # customer messages back later in the Helicone dashboard -- which
+                # is exactly what should not be there by default. Set
+                # HELICONE_LOG_CONTENT=true to opt back in for local debugging.
+                if os.environ.get("HELICONE_LOG_CONTENT", "").lower() not in ("1", "true"):
+                    headers["Helicone-Omit-Request"] = "true"
+                    headers["Helicone-Omit-Response"] = "true"
                 self._client = anthropic.Anthropic(
                     api_key=self._api_key,
                     base_url="https://anthropic.helicone.ai",
-                    default_headers={"Helicone-Auth": f"Bearer {helicone_key}"},
+                    default_headers=headers,
                 )
             else:
                 self._client = anthropic.Anthropic(api_key=self._api_key)

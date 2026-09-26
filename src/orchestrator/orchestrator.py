@@ -36,9 +36,10 @@ class Orchestrator:
         self,
         client: ClaudeClient | None = None,
         knowledge_base_dir: str | Path = DEFAULT_KNOWLEDGE_BASE_DIR,
+        memory_ttl_hours: float | None = None,
     ):
         self.client = client or ClaudeClient()
-        self.memory = SessionMemory()
+        self.memory = SessionMemory(ttl_hours=memory_ttl_hours)
         self.knowledge_base = KnowledgeBase(knowledge_base_dir)
         self.router = Router(self.client)
 
@@ -85,3 +86,21 @@ class Orchestrator:
             escalation_reason=result.escalation_reason,
             tool_calls_made=result.tool_calls_made,
         )
+
+    def export_session_data(self, session_id: str) -> list[dict[str, str]]:
+        """LGPD Art. 18, II and V: direito de acesso and portabilidade dos
+        dados. Everything this system holds about one session/customer, in
+        a plain, exportable shape -- the same messages the specialist sees,
+        nothing hidden behind it, because there is nothing else: this
+        orchestrator has no other per-session store.
+        """
+        return self.memory.as_api_messages(session_id)
+
+    def forget_session(self, session_id: str) -> None:
+        """LGPD Art. 18, VI: direito a eliminacao (right to erasure). Wipes
+        this session's conversation history. In a deployment where
+        SessionMemory has been swapped for Redis/a DB (see memory.py), this
+        is the one call site that needs to also touch whatever other
+        per-customer stores were added alongside it.
+        """
+        self.memory.clear(session_id)
