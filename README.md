@@ -43,7 +43,7 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ## Key results
 
-- **30 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, and 8 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, and the tool-loop giving up gracefully after too many iterations).
+- **42 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, and 9 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, and the tool-loop giving up gracefully after too many iterations).
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -60,9 +60,10 @@ rag.py BM25 knowledge base retrieval
 tools.py tool schemas + local tool implementations
 memory.py per-session conversation state, optional LGPD TTL
 privacy.py PII detection (knowledge-base guardrail)
+resilience.py retry + circuit breaker for transient API failures (Etapa 13)
 orchestrator.py ties it all together, plus LGPD export/erasure
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 30 scenarios, run offline against a fake client
+tests/ 42 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -339,6 +340,72 @@ recente em tempo real.
 # roda localmente o mesmo comando que o CI roda
 pip install -r requirements.txt
 pytest -v
+```
+
+## Resiliencia: retry + circuit breaker (Etapa 13)
+
+### O problema
+
+Ate a Etapa 12, toda chamada ao Claude (`ClaudeClient.send`) assume que ou
+funciona ou falha de vez. Na pratica, uma API remota tem falhas
+transitorias -- rate limit (429), timeout de rede, erro 5xx do servidor --
+que desaparecem sozinhas se voce tentar de novo meio segundo depois. Sem
+tratamento, uma dessas falhas sobe direto ate quem chamou
+`handle_message`, derruba o turno inteiro e o cliente perde a mensagem,
+mesmo quando o problema durou uma fracao de segundo.
+
+O oposto tambem e um problema: se a API inteira cair por minutos (nao
+segundos), simplesmente tentar de novo a cada mensagem so empilha retries
+sobre um servico que ja esta fora do ar, sem ganhar nada.
+
+### A solucao
+
+Duas pecas, em `resilience.py`, compostas, sem tocar em `ClaudeClient`:
+
+**Retry com backoff exponencial + jitter**: `is_transient(exc)` classifica
+a excecao usando as classes reais do SDK -- `RateLimitError`,
+`APITimeoutError`, `APIConnectionError`, `InternalServerError`, e qualquer
+`APIStatusError` com status 5xx sao transitorias; um 400 ou 401 nao sao
+(retry num request que esta errado nao resolve nada, so atrasa o erro de
+verdade). So os erros transitorios sao retentados, com delay
+`base_delay * 2**tentativa` (limitado por `max_delay`) e jitter aleatorio,
+ate `max_attempts`.
+
+**Circuit breaker**: acumula falhas transitorias consecutivas; ao cruzar
+`failure_threshold`, abre e passa a rejeitar chamadas na hora
+(`CircuitOpenError`) em vez de deixar o cliente esperar o timeout de rede
+de novo a cada mensagem enquanto a API esta fora do ar. Depois de
+`recovery_timeout` segundos, libera uma chamada de teste (half-open):
+sucesso fecha o circuito, falha reabre.
+
+`ResilientClaudeClient` combina as duas atras da mesma interface
+`.send(...)` que o resto do projeto ja usa -- e composicao, nao subclasse,
+entao router, agentes e tools nao precisam saber que ela existe. Uso
+opcional e desligado por padrao: `Orchestrator(resilient=True)`.
+
+### Stack tecnica
+
+Nenhuma dependencia nova alem do que ja estava implicito
+(`httpx`, transitiva do `anthropic`, agora declarada direto no
+`requirements.txt` porque os testes constroem excecoes reais do SDK com
+ela). Backoff e circuit breaker sao Python puro (`dataclasses`, `enum`,
+`time.monotonic`).
+
+### Resultado
+
+11 testes novos cobrindo classificacao de erro (transitorio vs. nao),
+retry ate sucesso, desistencia apos `max_attempts`, crescimento exponencial
+do delay com teto, e as tres transicoes do circuit breaker (fecha -> abre
+-> half-open -> fecha ou reabre) -- tudo deterministico e offline: o
+retry recebe uma funcao `sleep` fake que so registra os delays pedidos, e
+o circuit breaker recebe um relogio fake que avancamos manualmente, entao
+"reabre depois de 30s" e testado sem esperar 30 segundos de verdade. Mais
+1 cenario end-to-end provando que `Orchestrator(resilient=True)` sobrevive
+a uma falha transitoria bem no primeiro passo do pipeline (a propria
+chamada do router).
+
+```bash
+pytest tests/test_resilience.py -v
 ```
 
 ## License
