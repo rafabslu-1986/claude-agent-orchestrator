@@ -92,6 +92,41 @@ python examples/demo_conversation.py
 - **Real vector DB**: implement the same `search(query, top_k)` interface as `KnowledgeBase` and swap it in — no other file changes.
 - **Persistent memory**: swap the dict in `SessionMemory` for Redis or a database table behind the same `get` / `append` / `clear` interface.
 
+## Observabilidade: custo e latencia (Helicone)
+
+### O problema
+
+Rodar agentes em producao sem visibilidade de custo por conversa e latencia
+por chamada e operar no escuro. O primeiro sinal de problema costuma ser a
+fatura do fim do mes ou o cliente reclamando de demora, nao um alerta.
+
+### A solucao
+
+Instrumentacao opcional via Helicone, ativada so por uma variavel de
+ambiente (`HELICONE_API_KEY`). Sem a variavel, o sistema funciona
+exatamente como antes: zero mudanca de comportamento, zero dependencia
+nova obrigatoria. Com ela, toda chamada ao Claude passa a ser rastreada:
+prompt, resposta, tokens, custo e latencia, por conversa.
+
+A mudanca ficou isolada em um unico arquivo, `claude_client.py`, o unico
+ponto do projeto que importa o SDK da Anthropic, sem tocar em router,
+agentes, RAG ou memoria.
+
+### Stack tecnica
+
+Helicone (proxy de observabilidade, plano Hobby gratuito) configurado via
+parametros padrao do SDK, sem biblioteca adicional.
+
+### Resultado
+
+Testado em uma conversa real de 3 turnos (roteamento sales/billing e
+escalonamento humano no caso "unknown"). As 8 chamadas subjacentes
+(router, especialistas e tool use) apareceram no dashboard da Helicone com
+custo e latencia individuais, sem quebrar nenhum dos 16 testes automatizados
+existentes.
+
+![Dashboard Helicone mostrando requisicoes capturadas](docs/image.png)
+
 ## License
 
 MIT
