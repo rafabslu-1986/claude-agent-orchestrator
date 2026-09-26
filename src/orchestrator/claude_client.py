@@ -44,7 +44,7 @@ class ClaudeClient:
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._client = None  # lazily constructed so import-time never requires a key
 
-    def _get_sdk_client(self):
+        def _get_sdk_client(self):
         if self._client is None:
             if not self._api_key:
                 raise RuntimeError(
@@ -54,7 +54,15 @@ class ClaudeClient:
                 )
             import anthropic  # imported lazily so the package is optional for tests
 
-            self._client = anthropic.Anthropic(api_key=self._api_key)
+            helicone_key = os.environ.get("HELICONE_API_KEY")
+            if helicone_key:
+                self._client = anthropic.Anthropic(
+                    api_key=self._api_key,
+                    base_url="https://anthropic.helicone.ai",
+                    default_headers={"Helicone-Auth": f"Bearer {helicone_key}"},
+                )
+            else:
+                self._client = anthropic.Anthropic(api_key=self._api_key)
         return self._client
 
     def send(
