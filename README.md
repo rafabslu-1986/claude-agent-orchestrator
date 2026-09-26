@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml)
 
-**Live API:** [claude-agent-orchestrator-production.up.railway.app/docs](https://claude-agent-orchestrator-production.up.railway.app/docs) — an interactive Swagger UI where you can send a real message and watch it get routed, grounded and answered. See "Deploy (Etapa 6)" below for how it's hosted.
+**Live API:** [claude-agent-orchestrator-production.up.railway.app/docs](https://claude-agent-orchestrator-production.up.railway.app/docs) — an interactive Swagger UI where you can watch a real message get routed, grounded and answered. `GET /health` is open to anyone; `POST /messages` and `/sessions/*` require an `X-API-Key` header — see "Deploy (Etapa 6)" for the hosting and "Autenticacao da API (Etapa 15)" for why a public LLM-backed endpoint needs a key, not just a cost cap.
 
 A multi-agent orchestration framework built directly on the Claude API — no no-code layer in between. It routes an inbound message to the right specialist, grounds every policy-level answer in a real knowledge base through native tool use, and hands off to a human the moment an agent isn't confident.
 
@@ -45,8 +45,8 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ## Key results
 
-- **57 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, per-session cost-cap accounting and enforcement, the FastAPI HTTP layer (Etapa 6), and 10 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, the tool-loop giving up gracefully after too many iterations, and a session that gets escalated once it crosses its cost cap).
-- **Live and public**: the API is deployed on Railway and answers real requests against the production Claude model — see "Deploy (Etapa 6)" below.
+- **63 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, per-session cost-cap accounting and enforcement, the FastAPI HTTP layer including its `X-API-Key` guardrail (Etapa 6 / Etapa 15), and 10 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, the tool-loop giving up gracefully after too many iterations, and a session that gets escalated once it crosses its cost cap).
+- **Live and public**: the API is deployed on Railway and answers real requests against the production Claude model, behind both a per-session cost cap and request-level authentication — see "Deploy (Etapa 6)" and "Autenticacao da API (Etapa 15)" below.
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -69,7 +69,7 @@ resilience.py retry + circuit breaker for transient API failures (Etapa 13)
 budget.py per-session cost cap fed by real token usage (Etapa 14)
 orchestrator.py ties it all together, plus LGPD export/erasure
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 57 scenarios, run offline against a fake client
+tests/ 63 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -526,6 +526,52 @@ segundo turno escalona sem nenhuma nova chamada a API.
 
 ```bash
 pytest tests/test_budget.py -v
+```
+
+## Autenticacao da API: X-API-Key (Etapa 15)
+
+### O problema
+
+Colocar a API no ar (Etapa 6) e configurar um teto de custo por sessao
+(Etapa 14) resolvem problemas diferentes: o teto limita o estrago de UMA
+sessao, mas nao impede que qualquer pessoa, sem nenhuma credencial, abra
+sessoes novas indefinidamente contra um endpoint publico que chama um
+modelo pago de verdade. Um teto de custo sem autenticacao e um freio numa
+porta destrancada -- reduz o dano por sessao, mas nao fecha a porta.
+
+### A solucao
+
+`APIKeyHeader` (do proprio FastAPI) mais uma dependency `_require_api_key`
+em `api/main.py`, aplicada via `Security`/`Depends` em `POST /messages` e
+em `GET`/`DELETE /sessions/{id}` -- os tres endpoints que custam dinheiro
+ou expoem dados de sessao. `GET /health` fica de fora de proposito: precisa
+continuar respondendo sem credencial pra qualquer monitor de uptime.
+
+Opt-in via `ORCHESTRATOR_API_KEY`, seguindo o mesmo padrao de
+`HELICONE_API_KEY` (Etapa 8): sem a variavel definida, o comportamento e
+idêntico ao de antes desta etapa -- dev local e os testes existentes nunca
+precisam pensar em chave. Quando definida, toda chamada aos tres endpoints
+protegidos precisa mandar o mesmo valor de volta no header `X-API-Key`, ou
+recebe `401`.
+
+### Stack tecnica
+
+Nenhuma dependencia nova -- `fastapi.security.APIKeyHeader` ja vem com o
+FastAPI que a Etapa 6 ja tinha adicionado.
+
+### Resultado
+
+6 testes novos (63 no total): endpoint aberto por padrao quando a variavel
+nao esta definida, `401` sem header uma vez configurada, `401` com a chave
+errada, `200` com a chave certa, `GET`/`DELETE /sessions/{id}` tambem
+protegidos, e `/health` continuando aberto mesmo com a chave configurada.
+A instancia publica em produção tem essa chave configurada -- testar
+`POST /messages` pelo Swagger UI (`/docs`) agora exige colar um valor no
+campo "X-API-Key" (o cadeado ao lado de cada endpoint protegido); `GET
+/health` continua testavel por qualquer visitante sem nenhuma credencial.
+
+```bash
+pytest tests/test_api.py -v -k auth
 ```
 
 ## License
