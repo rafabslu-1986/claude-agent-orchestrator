@@ -5,7 +5,7 @@ Core pieces:
 - prompts: the Role / Context / Limits / Format (FPCL) system-prompt builder
 - router: intent classification that decides which specialist handles a message
 - agents: specialist agents (sales, support, billing), each with its own FPCL prompt
-- rag: TF-IDF based retrieval over a local knowledge base
+- rag: BM25 based retrieval over a local knowledge base
 - tools: Claude native tool-use definitions and their local implementations
 - memory: per-session conversation state
 - orchestrator: ties everything together, including human handoff
