@@ -145,3 +145,86 @@ def test_second_message_is_escalated_via_the_api_once_the_session_budget_is_exce
     assert second.json()["escalated"] is True
     assert second.json()["agent_name"] == "budget_guardrail"
     assert len(fake.calls) == 2  # unchanged -- the second turn never called the model
+
+
+# --- Etapa 15: X-API-Key auth, opt-in via ORCHESTRATOR_API_KEY -------------
+
+
+def test_messages_endpoint_is_open_by_default_when_no_key_is_configured(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_KEY", raising=False)
+    fake = FakeClaudeClient([text_response("sales"), text_response("Sure — how many seats?")])
+    client = _client_with(Orchestrator(client=fake))
+
+    response = client.post(
+        "/messages", json={"session_id": "auth-session-1", "message": "pricing please"}
+    )
+
+    assert response.status_code == 200
+
+
+def test_messages_endpoint_rejects_requests_with_no_key_once_configured(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_API_KEY", "s3cr3t")
+    fake = FakeClaudeClient([])  # never reached -- rejected before the model is called
+    client = _client_with(Orchestrator(client=fake))
+
+    response = client.post(
+        "/messages", json={"session_id": "auth-session-2", "message": "pricing please"}
+    )
+
+    assert response.status_code == 401
+    assert fake.calls == []
+
+
+def test_messages_endpoint_rejects_the_wrong_key(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_API_KEY", "s3cr3t")
+    fake = FakeClaudeClient([])
+    client = _client_with(Orchestrator(client=fake))
+
+    response = client.post(
+        "/messages",
+        json={"session_id": "auth-session-3", "message": "pricing please"},
+        headers={"X-API-Key": "wrong"},
+    )
+
+    assert response.status_code == 401
+    assert fake.calls == []
+
+
+def test_messages_endpoint_accepts_the_correct_key(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_API_KEY", "s3cr3t")
+    fake = FakeClaudeClient([text_response("sales"), text_response("Sure — how many seats?")])
+    client = _client_with(Orchestrator(client=fake))
+
+    response = client.post(
+        "/messages",
+        json={"session_id": "auth-session-4", "message": "pricing please"},
+        headers={"X-API-Key": "s3cr3t"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_session_export_and_delete_are_also_gated_once_a_key_is_configured(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_API_KEY", "s3cr3t")
+    fake = FakeClaudeClient([])
+    client = _client_with(Orchestrator(client=fake))
+
+    export_without_key = client.get("/sessions/auth-session-5")
+    delete_without_key = client.delete("/sessions/auth-session-5")
+    export_with_key = client.get(
+        "/sessions/auth-session-5", headers={"X-API-Key": "s3cr3t"}
+    )
+
+    assert export_without_key.status_code == 401
+    assert delete_without_key.status_code == 401
+    assert export_with_key.status_code == 200
+
+
+def test_health_endpoint_stays_open_even_when_a_key_is_configured(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_API_KEY", "s3cr3t")
+    client = _client_with(Orchestrator(client=FakeClaudeClient([])))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
