@@ -11,7 +11,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-
 DEFAULT_MODEL = "claude-sonnet-4-5"
 
 
@@ -44,7 +43,7 @@ class ClaudeClient:
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._client = None  # lazily constructed so import-time never requires a key
 
-        def _get_sdk_client(self):
+    def _get_sdk_client(self):
         if self._client is None:
             if not self._api_key:
                 raise RuntimeError(
@@ -78,9 +77,9 @@ class ClaudeClient:
         kwargs: dict[str, Any] = dict(
             model=self.model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system,
             messages=messages,
+            extra_body={"temperature": temperature},
         )
         if tools:
             kwargs["tools"] = tools
