@@ -43,7 +43,7 @@ The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm
 
 ## Key results
 
-- **42 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, and 9 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, and the tool-loop giving up gracefully after too many iterations).
+- **50 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation and LGPD-driven TTL expiry, the PII knowledge-base guardrail, session export/erasure, retry/circuit-breaker behavior against real Anthropic SDK exception types, per-session cost-cap accounting and enforcement, and 10 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, data export, data erasure, a transient-failure recovery, the tool-loop giving up gracefully after too many iterations, and a session that gets escalated once it crosses its cost cap).
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -61,9 +61,10 @@ tools.py tool schemas + local tool implementations
 memory.py per-session conversation state, optional LGPD TTL
 privacy.py PII detection (knowledge-base guardrail)
 resilience.py retry + circuit breaker for transient API failures (Etapa 13)
+budget.py per-session cost cap fed by real token usage (Etapa 14)
 orchestrator.py ties it all together, plus LGPD export/erasure
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 42 scenarios, run offline against a fake client
+tests/ 50 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -406,6 +407,60 @@ chamada do router).
 
 ```bash
 pytest tests/test_resilience.py -v
+```
+
+## Orcamento de sessao: teto de custo (Etapa 14)
+
+### O problema
+
+`MAX_TOOL_ITERATIONS` (`agents.py`) limita quantas chamadas o tool-use loop
+faz DENTRO de um unico turno. Nada, ate a Etapa 13, limitava o custo
+ACUMULADO de uma sessao inteira ao longo de VARIOS turnos -- uma conversa
+longa, ou um cliente preso repetindo a mesma duvida de jeitos diferentes,
+gera chamada atras de chamada sem que nada avise ou interrompa. E o mesmo
+tipo de problema que a Etapa 8 (observabilidade) resolve depois do fato,
+mostrando o custo no dashboard -- aqui a ideia e agir ANTES do fato: um
+teto configuravel e opcional que escalona pra humano assim que uma sessao
+cruza o limite, em vez de deixar a conversa (e a fatura) continuar sem
+controle.
+
+### A solucao
+
+`SessionBudget` (`budget.py`) acumula uma estimativa de custo em USD por
+`session_id`, a partir dos tokens de entrada/saida que cada resposta real
+da API do Claude ja carrega (`ClaudeResponse.usage`, adicionado em
+`claude_client.py` pra isso). Desligado por padrao (`max_cost_usd=None`):
+sem configurar nada, nenhuma sessao jamais "estoura" o orcamento, e o
+comportamento de hoje (sem limite) continua identico.
+
+Quando `Orchestrator(max_session_cost_usd=...)` esta configurado e uma
+sessao cruza o teto, `handle_message` escalona pra humano
+(`agent_name="budget_guardrail"`) sem sequer chamar o router ou um
+especialista no turno seguinte -- a protecao age antes da chamada custosa,
+nao depois.
+
+A estimativa e de ordem de grandeza, nao uma fatura exata -- nao inclui
+desconto de prompt caching nem os precos separados de cache read/write, so
+o preco base de input/output por modelo (tabela publica da Anthropic,
+valida em Jan/2026; cai no preco padrao do Sonnet se o modelo nao estiver
+na tabela).
+
+### Stack tecnica
+
+Nenhuma dependencia nova. `budget.py` e `dataclasses` puro em Python; a
+estimativa de custo e so aritmetica sobre os tokens que a API ja devolve.
+
+### Resultado
+
+8 testes novos (50 no total): calculo de custo com preco conhecido e
+fallback pra modelo desconhecido, acumulo de custo entre chamadas da mesma
+sessao, isolamento entre sessoes, guardrail desligado nunca estoura,
+guardrail liga ao cruzar o teto, reset de sessao, e 1 cenario end-to-end
+provando que, apos o primeiro turno estourar um teto de centavos, o
+segundo turno escalona sem nenhuma nova chamada a API.
+
+```bash
+pytest tests/test_budget.py -v
 ```
 
 ## License
