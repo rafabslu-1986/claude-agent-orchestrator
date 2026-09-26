@@ -25,7 +25,7 @@ Router (1 Claude call, no tools)
 │ ┌────────────┴────────────┐
 │ ▼ ▼
 │ search_knowledge_base escalate_to_human
-│ (TF-IDF over local docs) (flags for a human)
+│ (BM25 over local docs) (flags for a human)
 │ │
 │ ▼
 │ grounded final answer
@@ -35,13 +35,13 @@ Router (1 Claude call, no tools)
 
 Every arrow above is a real function call in this repo, not a diagram aspiration — see `src/orchestrator/orchestrator.py` for the whole pipeline in about 40 lines.
 
-## Why TF-IDF instead of an embeddings API
+## Why BM25 instead of an embeddings API
 
-The retrieval layer (`rag.py`) uses TF-IDF + cosine similarity over local markdown files, not an embeddings API. That's a scope decision, not an architectural limitation: `KnowledgeBase.search(query, top_k)` is the only interface the rest of the code depends on, so swapping in a real vector database (pgvector, Pinecone, etc.) with embeddings is a one-file change — nothing in the router, agents, or orchestrator needs to know. Keeping it TF-IDF means the whole project installs, runs, and tests fully offline with no external API cost.
+The retrieval layer (`rag.py`) uses BM25 (lexical ranking, via the tiny `rank_bm25` package) over local markdown files, not an embeddings API. That's a scope decision, not an architectural limitation: `KnowledgeBase.search(query, top_k)` is the only interface the rest of the code depends on, so swapping in a real vector database (pgvector, Pinecone, etc.) with embeddings is a one-file change — nothing in the router, agents, or orchestrator needs to know. Keeping it lexical means the whole project installs, runs, and tests fully offline with no external API cost. It started as TF-IDF + cosine similarity; see "RAG avançado (Etapa 10)" below for why it's BM25 now, and for the honest limits of lexical retrieval that swapping the ranking algorithm alone doesn't fix.
 
 ## Key results
 
-- **16 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy, both tools, session memory isolation, and 6 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, and the tool-loop giving up gracefully after too many iterations).
+- **18 automated test scenarios, all passing** — routing (including the unknown-intent fallback), RAG retrieval accuracy (including the precision-gate behavior added in Etapa 10), both tools, session memory isolation, and 6 full end-to-end pipeline scenarios (grounded answer, direct answer, escalation, multi-turn memory, and the tool-loop giving up gracefully after too many iterations).
 - Tests run **fully offline** against a scripted fake Claude client (`tests/conftest.py`) — no API key or network access needed to verify the logic. A separate `examples/demo_conversation.py` script is provided for a live run against the real API.
 - The tool-use loop has a hard iteration cap with a graceful escalation fallback, so a specialist that can't converge on an answer degrades to a human handoff instead of hanging or erroring.
 
@@ -53,12 +53,12 @@ claude_client.py thin wrapper around the Anthropic SDK (the only file that impor
 prompts.py FPCL system-prompt builder
 router.py intent classification
 agents.py specialist agents + the shared tool-use loop
-rag.py TF-IDF knowledge base retrieval
+rag.py BM25 knowledge base retrieval
 tools.py tool schemas + local tool implementations
 memory.py per-session conversation state
 orchestrator.py ties it all together
 knowledge_base/ sample markdown docs the specialists search against
-tests/ 16 scenarios, run offline against a fake client
+tests/ 18 scenarios, run offline against a fake client
 examples/ live demo script (needs a real API key)
 ```
 
@@ -164,6 +164,63 @@ quatro casos de borda e o cenario em portugues.
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 python evals/run_evals.py
+```
+
+## RAG avancado (Etapa 10)
+
+### O problema
+
+O roteamento (Etapa 9) mede se o agente conversa direito. Nada, ate aqui,
+media se o proprio retrieval (`rag.py`) busca o pedaco certo da base de
+conhecimento -- ou, mais importante, se ele confiantemente devolve um
+pedaco errado para uma pergunta que a base simplesmente nao responde.
+Retrieval "bom o suficiente" na demonstracao mas silenciosamente errado em
+producao e como um RAG alimenta o modelo com contexto que parece relevante
+e nao e, o que vira resposta inventada em vez de escalonamento.
+
+### A solucao
+
+Duas mudancas, medidas uma contra a outra em `evals/rag_eval.py`, offline,
+sem chave de API:
+
+Primeiro, troquei o ranking de TF-IDF + similaridade de cosseno por BM25
+(via `rank_bm25`), que soma saturacao de frequencia de termo e normalizacao
+por tamanho do documento -- e removeu duas dependencias pesadas
+(scikit-learn, numpy) do projeto. So essa troca, medida, nao resolveu o
+problema real: com um eval de 15 perguntas respondiveis + 6 perguntas
+propositalmente nao respondiveis pela base (ex.: "voces aceitam quais
+moedas de pagamento?", que a base nunca cobre), tanto o TF-IDF antigo
+quanto o BM25 novo devolviam, com confianca, algum pedaco da base para
+100% das perguntas nao respondiveis -- porque uma unica palavra em comum
+("pagamento", "envio") ja basta para pontuar bem em qualquer ranking
+lexical, bounded ou nao.
+
+A correcao real foi um segundo gate, opcional e explicito:
+`min_token_overlap`, que exige um numero minimo de palavras distintas (nao
+apenas uma pontuacao alta) em comum entre a pergunta e o pedaco antes de
+confiar nele. Ligado (`min_token_overlap=2`), a taxa de falso-retrieval cai
+de 100% para 17%, ao custo de perder 2 das 15 perguntas respondiveis (Hit
+Rate@3 cai de 100% para 87%). E uma troca real de precisao por cobertura,
+nao uma correcao gratuita -- por isso o gate fica desligado por padrao
+(comportamento de hoje preservado) e vira uma escolha explicita de quem
+chama `search()`.
+
+### Stack tecnica
+
+`rank_bm25` (puro Python, substitui scikit-learn + numpy). Nenhuma
+dependencia nova para o gate de precisao -- e so contagem de conjuntos de
+tokens.
+
+### Resultado
+
+| Metrica | Antes (score apenas) | Depois (+ min_token_overlap=2) |
+|---|---|---|
+| Hit Rate@3 (15 perguntas respondiveis) | 100% | 87% |
+| MRR@3 | 1.000 | 0.867 |
+| False-Retrieval Rate (6 perguntas nao respondiveis) | 100% | 17% |
+
+```bash
+python evals/rag_eval.py
 ```
 
 ## License
