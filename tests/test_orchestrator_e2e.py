@@ -5,9 +5,10 @@ answer, a tool-driven answer, and an escalation.
 
 from pathlib import Path
 
-from conftest import FakeClaudeClient, text_response, tool_use_response
+from conftest import FakeClaudeClient, fake_api_error, text_response, tool_use_response
 
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.resilience import RetryConfig
 
 KB_DIR = Path(__file__).parent.parent / "src" / "orchestrator" / "knowledge_base"
 
@@ -152,3 +153,30 @@ def test_e2e_forget_session_erases_conversation_history():
     orch.forget_session("session-8")
 
     assert orch.export_session_data("session-8") == []
+
+
+def test_e2e_resilient_orchestrator_survives_a_transient_router_failure():
+    """Etapa 13: with resilient=True, a 503 on the router's own call (the
+    very first Claude call in the whole pipeline) is retried and the
+    customer still gets a normal answer -- with resilient=False (today's
+    default) the same failure would raise and the message would be lost.
+    """
+    client = FakeClaudeClient(
+        [
+            fake_api_error(503),  # router's first attempt: transient failure
+            text_response("sales"),  # router's retry succeeds
+            text_response("Sure — could you tell me roughly how many seats you need?"),
+        ]
+    )
+    orch = Orchestrator(
+        client=client,
+        knowledge_base_dir=KB_DIR,
+        resilient=True,
+        retry_config=RetryConfig(max_attempts=2, base_delay=0.0),
+    )
+
+    reply = orch.handle_message("session-9", "I'm interested in your Growth plan")
+
+    assert reply.intent == "sales"
+    assert reply.escalated is False
+    assert reply.text == "Sure — could you tell me roughly how many seats you need?"
