@@ -14,6 +14,7 @@ from .agents import Specialist, build_billing_agent, build_sales_agent, build_su
 from .claude_client import ClaudeClient
 from .memory import SessionMemory
 from .rag import KnowledgeBase
+from .resilience import CircuitBreaker, ResilientClaudeClient, RetryConfig
 from .router import Router
 from .tools import ToolExecutor
 
@@ -37,8 +38,23 @@ class Orchestrator:
         client: ClaudeClient | None = None,
         knowledge_base_dir: str | Path = DEFAULT_KNOWLEDGE_BASE_DIR,
         memory_ttl_hours: float | None = None,
+        resilient: bool = False,
+        retry_config: RetryConfig | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
     ):
-        self.client = client or ClaudeClient()
+        base_client = client or ClaudeClient()
+        # Etapa 13: opt-in, off by default -- today's behavior (an
+        # unhandled exception from a transient API failure bubbles straight
+        # up) is unchanged unless resilient=True. ResilientClaudeClient is a
+        # pure wrapper around whatever exposes .send(...), so router,
+        # agents and tools never need to know it exists.
+        self.client = (
+            ResilientClaudeClient(
+                base_client, retry_config=retry_config, circuit_breaker=circuit_breaker
+            )
+            if resilient
+            else base_client
+        )
         self.memory = SessionMemory(ttl_hours=memory_ttl_hours)
         self.knowledge_base = KnowledgeBase(knowledge_base_dir)
         self.router = Router(self.client)

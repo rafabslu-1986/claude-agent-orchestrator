@@ -9,8 +9,11 @@ Core pieces:
 - tools: Claude native tool-use definitions and their local implementations
 - memory: per-session conversation state, with optional LGPD-driven TTL
 - privacy: PII detection used by the knowledge-base guardrail test
-- orchestrator: ties everything together, including human handoff and the
-  LGPD data-subject rights (export_session_data, forget_session)
+- resilience: optional retry-with-backoff + circuit breaker around any
+  .send()-shaped client, for transient Claude API failures
+- orchestrator: ties everything together, including human handoff, the
+  LGPD data-subject rights (export_session_data, forget_session), and
+  optional resilience (resilient=True)
 """
 
 __version__ = "0.1.0"
