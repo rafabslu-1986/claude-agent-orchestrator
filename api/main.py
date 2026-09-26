@@ -16,6 +16,12 @@ Configuration is via environment variables, read once at import time:
                                         entry point, unlike the library default
     ORCHESTRATOR_MEMORY_TTL_HOURS      optional float, LGPD memory TTL (Etapa 11)
     ORCHESTRATOR_MAX_SESSION_COST_USD  optional float, per-session cost cap (Etapa 14)
+    ORCHESTRATOR_API_KEY               optional -- when set, every request to
+                                        /messages and /sessions/* must send it
+                                        back via the "X-API-Key" header (Etapa 15).
+                                        Unset (the default) leaves the API open,
+                                        same as local/dev behavior before this
+                                        variable existed. /health is never gated.
 
 Run locally:
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -32,7 +38,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Security  # noqa: E402
+from fastapi.security import APIKeyHeader  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from orchestrator.orchestrator import Orchestrator  # noqa: E402
@@ -46,6 +53,21 @@ def _env_float(name: str) -> float | None:
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     return default if value is None else value.strip().lower() in ("1", "true", "yes")
+
+
+# Etapa 15: opt-in request authentication. When ORCHESTRATOR_API_KEY is unset
+# (the default), `_require_api_key` is a no-op and every route behaves exactly
+# as before -- this mirrors the HELICONE_API_KEY opt-in pattern in
+# claude_client.py, so local development never has to think about auth.
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def _require_api_key(provided: str | None = Security(_api_key_header)) -> None:
+    expected = os.environ.get("ORCHESTRATOR_API_KEY")
+    if not expected:
+        return  # auth disabled -- unset is the "open" default
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
 
 
 app = FastAPI(
@@ -97,7 +119,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/messages", response_model=MessageOut)
+@app.post("/messages", response_model=MessageOut, dependencies=[Depends(_require_api_key)])
 def post_message(payload: MessageIn) -> MessageOut:
     if not payload.message.strip():
         raise HTTPException(status_code=422, detail="message must not be empty")
@@ -114,13 +136,17 @@ def post_message(payload: MessageIn) -> MessageOut:
     )
 
 
-@app.get("/sessions/{session_id}", response_model=list[ExportedMessage])
+@app.get(
+    "/sessions/{session_id}",
+    response_model=list[ExportedMessage],
+    dependencies=[Depends(_require_api_key)],
+)
 def export_session(session_id: str) -> list[dict[str, str]]:
     """LGPD Art. 18, II/V -- direito de acesso e portabilidade (Etapa 11)."""
     return _orchestrator.export_session_data(session_id)
 
 
-@app.delete("/sessions/{session_id}", status_code=204)
+@app.delete("/sessions/{session_id}", status_code=204, dependencies=[Depends(_require_api_key)])
 def forget_session(session_id: str) -> None:
     """LGPD Art. 18, VI -- direito a eliminacao (Etapa 11)."""
     _orchestrator.forget_session(session_id)
