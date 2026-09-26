@@ -1,6 +1,8 @@
 """Scenario 7: session memory persists and isolates conversations correctly."""
 
-from orchestrator.memory import SessionMemory
+from datetime import datetime, timedelta, timezone
+
+from orchestrator.memory import Message, SessionMemory
 
 
 def test_memory_persists_across_turns_within_a_session():
@@ -34,3 +36,36 @@ def test_memory_clear_removes_session():
     memory.clear("session-a")
 
     assert memory.get("session-a") == []
+
+
+def test_memory_without_ttl_never_expires_messages():
+    memory = SessionMemory()  # ttl_hours=None: today's behavior, unchanged
+    old = datetime.now(timezone.utc) - timedelta(days=365)
+    memory._sessions["session-a"] = [Message(role="user", content="ancient", timestamp=old)]
+
+    assert len(memory.get("session-a")) == 1
+
+
+def test_memory_ttl_prunes_expired_messages_but_keeps_fresh_ones():
+    """LGPD Art. 6, III (necessidade): retention is bounded and explicit,
+    not indefinite-by-default.
+    """
+    memory = SessionMemory(ttl_hours=24)
+    now = datetime.now(timezone.utc)
+    memory._sessions["session-a"] = [
+        Message(role="user", content="two days old", timestamp=now - timedelta(days=2)),
+        Message(role="assistant", content="one hour old", timestamp=now - timedelta(hours=1)),
+    ]
+
+    history = memory.get("session-a")
+
+    assert [m.content for m in history] == ["one hour old"]
+
+
+def test_memory_ttl_drops_the_session_entirely_once_everything_expires():
+    memory = SessionMemory(ttl_hours=24)
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    memory._sessions["session-a"] = [Message(role="user", content="stale", timestamp=old)]
+
+    assert memory.get("session-a") == []
+    assert "session-a" not in memory._sessions

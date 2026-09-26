@@ -119,3 +119,36 @@ def test_e2e_tool_loop_gives_up_gracefully_after_max_iterations():
 
     assert reply.escalated is True
     assert "max iterations" in reply.escalation_reason
+
+
+def test_e2e_export_session_data_returns_full_conversation():
+    orch = _build_orchestrator(
+        [
+            text_response("sales"),
+            text_response("Sure — could you tell me roughly how many seats you need?"),
+        ]
+    )
+
+    orch.handle_message("session-7", "I'm interested in your Growth plan")
+    exported = orch.export_session_data("session-7")
+
+    assert exported == [
+        {"role": "user", "content": "I'm interested in your Growth plan"},
+        {"role": "assistant", "content": "Sure — could you tell me roughly how many seats you need?"},
+    ]
+
+
+def test_e2e_forget_session_erases_conversation_history():
+    orch = _build_orchestrator(
+        [
+            text_response("sales"),
+            text_response("Sure — could you tell me roughly how many seats you need?"),
+        ]
+    )
+
+    orch.handle_message("session-8", "I'm interested in your Growth plan")
+    assert orch.export_session_data("session-8") != []
+
+    orch.forget_session("session-8")
+
+    assert orch.export_session_data("session-8") == []
