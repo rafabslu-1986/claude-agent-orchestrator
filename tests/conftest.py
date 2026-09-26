@@ -47,15 +47,27 @@ def knowledge_base_dir():
     return Path(__file__).parent.parent / "src" / "orchestrator" / "knowledge_base"
 
 
-def text_response(text: str) -> ClaudeResponse:
-    return ClaudeResponse(text=text, tool_calls=[], stop_reason="end_turn")
+# A small, realistic-looking default so every test exercises the Etapa 14
+# usage-accumulation plumbing (router -> agent -> orchestrator) even when
+# it isn't the thing under test -- pass usage=... explicitly to override.
+DEFAULT_TEST_USAGE = {"input_tokens": 200, "output_tokens": 50}
 
 
-def tool_use_response(name: str, input_: dict, call_id: str = "call_1") -> ClaudeResponse:
+def text_response(text: str, usage: dict[str, int] | None = DEFAULT_TEST_USAGE) -> ClaudeResponse:
+    return ClaudeResponse(text=text, tool_calls=[], stop_reason="end_turn", usage=usage)
+
+
+def tool_use_response(
+    name: str,
+    input_: dict,
+    call_id: str = "call_1",
+    usage: dict[str, int] | None = DEFAULT_TEST_USAGE,
+) -> ClaudeResponse:
     return ClaudeResponse(
         text="",
         tool_calls=[{"id": call_id, "name": name, "input": input_}],
         stop_reason="tool_use",
+        usage=usage,
     )
 
 

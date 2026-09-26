@@ -180,3 +180,39 @@ def test_e2e_resilient_orchestrator_survives_a_transient_router_failure():
     assert reply.intent == "sales"
     assert reply.escalated is False
     assert reply.text == "Sure — could you tell me roughly how many seats you need?"
+
+
+def test_e2e_second_message_is_escalated_without_any_api_call_once_budget_is_exceeded():
+    """Etapa 14: the first turn's usage alone blows past a tiny cap, so the
+    second .handle_message() must short-circuit before calling the router
+    or any specialist. Proof, not just assertion: the FakeClaudeClient below
+    has exactly 2 scripted responses -- if the budget guardrail failed to
+    engage, this test would fail with "ran out of scripted responses"
+    instead of the assertions below ever running.
+    """
+    client = FakeClaudeClient(
+        [
+            text_response(  # router
+                "sales", usage={"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+            ),
+            text_response(  # specialist's direct answer
+                "Sure — could you tell me roughly how many seats you need?",
+                usage={"input_tokens": 1_000_000, "output_tokens": 1_000_000},
+            ),
+        ]
+    )
+    orch = Orchestrator(
+        client=client,
+        knowledge_base_dir=KB_DIR,
+        max_session_cost_usd=0.01,  # a couple of cents -- the first turn alone costs $18
+    )
+
+    first = orch.handle_message("session-10", "I'm interested in your Growth plan")
+    assert first.escalated is False
+
+    second = orch.handle_message("session-10", "ok, one more question")
+
+    assert second.escalated is True
+    assert second.agent_name == "budget_guardrail"
+    assert "budget" in second.escalation_reason
+    assert len(client.calls) == 2  # unchanged since the first turn -- no 3rd API call happened
