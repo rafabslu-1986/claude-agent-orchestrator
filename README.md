@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml)
 
-**Live API:** [claude-agent-orchestrator-production.up.railway.app/docs](https://claude-agent-orchestrator-production.up.railway.app/docs) — an interactive Swagger UI where you can watch a real message get routed, grounded and answered. `GET /health` is open to anyone; `POST /messages` and `/sessions/*` require an `X-API-Key` header — see "Deploy (Etapa 6)" for the hosting and "Autenticacao da API (Etapa 15)" for why a public LLM-backed endpoint needs a key, not just a cost cap.
+**Live API:** [claude-agent-orchestrator-production.up.railway.app/docs](https://claude-agent-orchestrator-production.up.railway.app/docs) — an interactive Swagger UI where you can watch a real message get routed, grounded and answered. `GET /health` is open to anyone; `POST /messages` and `/sessions/*` require an `X-API-Key` header — see "Deploy (Etapa 6)" for the hosting and "Autenticacao da API (Etapa 15)" for why a public LLM-backed endpoint needs a key, not just a cost cap. Want to try `POST /messages` live? Open an issue or ping [@rafabslu-1986](https://github.com/rafabslu-1986) and I'll hand you a demo key.
 
 A multi-agent orchestration framework built directly on the Claude API — no no-code layer in between. It routes an inbound message to the right specialist, grounds every policy-level answer in a real knowledge base through native tool use, and hands off to a human the moment an agent isn't confident.
 
@@ -565,10 +565,16 @@ FastAPI que a Etapa 6 ja tinha adicionado.
 nao esta definida, `401` sem header uma vez configurada, `401` com a chave
 errada, `200` com a chave certa, `GET`/`DELETE /sessions/{id}` tambem
 protegidos, e `/health` continuando aberto mesmo com a chave configurada.
-A instancia publica em produção tem essa chave configurada -- testar
-`POST /messages` pelo Swagger UI (`/docs`) agora exige colar um valor no
-campo "X-API-Key" (o cadeado ao lado de cada endpoint protegido); `GET
-/health` continua testavel por qualquer visitante sem nenhuma credencial.
+A instancia publica em producao tem essa chave configurada e o valor nao
+e publicado em lugar nenhum (nem aqui, nem no GIF) -- um teto de sessao
+sem chave protege uma sessao, nao impede sessoes novas sem limite, que e
+exatamente o problema que a chave fecha. Testar `POST /messages` pelo
+Swagger UI (`/docs`) agora exige colar um valor no campo "X-API-Key" (o
+cadeado ao lado de cada endpoint protegido); `GET /health` continua
+testavel por qualquer visitante sem nenhuma credencial. Quem quiser testar
+`/messages` de verdade pode abrir uma issue ou chamar
+[@rafabslu-1986](https://github.com/rafabslu-1986) pra ganhar uma chave de
+demonstracao.
 
 ```bash
 pytest tests/test_api.py -v -k auth
