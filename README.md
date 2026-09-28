@@ -1,4 +1,7 @@
 # Claude Agent Orchestrator
+> **Aviso de licença:** este código é disponibilizado publicamente apenas para consulta e demonstração técnica (portfólio) — não é um projeto open source, e nenhuma licença de uso, cópia, modificação, distribuição ou exploração comercial é concedida a terceiros.
+>
+> **License notice:** this code is made publicly available solely for review and technical demonstration purposes (portfolio) — it is not open source, and no license to use, copy, modify, distribute, or commercially exploit it is granted to third parties.
 
 [![CI](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/rafabslu-1986/claude-agent-orchestrator/actions/workflows/tests.yml)
 
@@ -582,4 +585,6 @@ pytest tests/test_api.py -v -k auth
 
 ## License
 
-MIT
+Todos os direitos reservados. Este repositório é publicado apenas para consulta e demonstração técnica — não há licença de uso, cópia, modificação, distribuição ou exploração comercial concedida a terceiros. Veja o arquivo LICENSE.
+
+All rights reserved. This repository is published for review and technical demonstration only — no license to use, copy, modify, distribute, or commercially exploit it is granted. See the LICENSE file.
